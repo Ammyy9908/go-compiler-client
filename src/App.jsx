@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Editor from '@monaco-editor/react';
 import { FaPlay } from 'react-icons/fa';
 import { FileJson, Puzzle, Gem, Code2, Coffee, Flame, Sun, Moon } from 'lucide-react';
-import { executeCode } from './services/execution';
+import { executeCode,getExecution } from './services/execution';
 import { FaGolang } from "react-icons/fa6";
 import { FaJava, FaSwift, FaRust, FaPython } from "react-icons/fa";
 import { SiGnubash } from "react-icons/si";
@@ -20,13 +20,8 @@ const Spinner = () => (
 const languages = [
   { name: 'JavaScript', icon: <IoLogoJavascript className="h-5 w-5" />, id: '2', fileName: 'main.js', boilerplate: '// Start coding here' },
   { name: 'Python', icon: <FaPython className="h-5 w-5" />, id: '1', fileName: 'code.py', boilerplate: '# Start coding here' },
-  { name: 'Ruby', icon: <DiRuby className="h-5 w-5" />, id: '4', fileName: 'main.rb', boilerplate: '# Start coding here' },
-  { name: 'Go', icon: <FaGolang className="h-5 w-5" />, id: '2', fileName: 'code.go', boilerplate: '// Start coding here' },
-  { name: 'Java', icon: <FaJava className="h-5 w-5" />, id: '6', fileName: 'Main.java', boilerplate: '// Start coding here' },
-  { name: 'Swift', icon: <FaSwift className="h-5 w-5" />, id: '3', fileName: 'main.swift', boilerplate: '// Start coding here' },
-  { name: 'C++', icon: <Flame className="h-5 w-5" />, id: '7', fileName: 'main.cpp', boilerplate: '// Start coding here' },
-  { name: 'Rust', icon: <FaRust className="h-5 w-5" />, id: '8', fileName: 'rust.rs', boilerplate: '// Start coding here' },
-  { name: 'Bash', icon: <SiGnubash className="h-5 w-5" />, id: '9', fileName: 'main.sh', boilerplate: '# Start coding here' },
+  ,
+  { name: 'Bash', icon: <SiGnubash className="h-5 w-5" />, id: '3', fileName: 'main.sh', boilerplate: '# Start coding here' },
 ];
 
 const LanguageSelectionToolbar = ({ selectedLanguage, onLanguageSelect }) => (
@@ -112,7 +107,7 @@ const ThemeToggle = ({ theme, setTheme }) => (
 
 const App = () => {
   const [editor, setEditor] = useState(null);
-  const [connectionID, setConnectionID] = useState(uuidv4());
+  
   const [output, setOutput] = useState('');
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [executing, setExecuting] = useState(false);
@@ -129,50 +124,68 @@ const App = () => {
 
   const handleExecute = async () => {
     setExecuting(true);
+    const request_id = uuidv4();
+
     if (editor) {
       const code = editor.getValue();
       const encodedCode = btoa(code);
-           const encodedStdInput = btoa(stdInput);
-      
-      const ws = new WebSocket(`ws://localhost:8082/ws?connection_id=${connectionID}`);
-      
-      ws.onopen = async () => {
-        console.log('WebSocket connection opened');
-        await executeCode({
+      const encodedStdInput = btoa(stdInput);
+
+      try {
+        // Trigger code execution
+        const executeResponse = await executeCode({
           code: encodedCode,
           language_id: +selectedLanguage,
-          connection_id: connectionID,
+          request_id: request_id,
           stdin: encodedStdInput
         });
-      };
-      
-      ws.onmessage = (event) => {
-        const output = JSON.parse(event.data);
-        console.log(output);
-      
-        // Check if the message is the specific connection message
-        if (output.status === 'connected' && output.message === 'You are successfully connected') {
-          console.log('Connection message received, keeping the connection open');
-        } else {
-          if (output['output']) {
-            setOutput(output['output']);
-          }
-          setExecuting(false);
-          ws.close();
-        }
-      };
-      
-      ws.onclose = () => {
-        console.log('WebSocket connection closed');
-      };
-      
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        ws.close();
-      };
+
+        // Start polling for execution result
+
+        setTimeout(async () => {
+          await pollForExecutionResult(request_id);
+        },300)
+        
+      } catch (error) {
+        setOutput(`Error: ${error.message}`);
+      } finally {
+        setExecuting(false);
+      }
     }
   };
 
+  const pollForExecutionResult = async (request_id) => {
+    console.log("Starting polling for execution result...");
+  
+    let resultReceived = false;
+    const pollInterval = 2000; // 2 seconds interval
+  
+    while (!resultReceived) {
+      try {
+        console.log(`Polling request with ID: ${request_id}`);
+        
+        const executionResponse = await getExecution({ request_id });
+        console.log("Received response:", executionResponse);
+  
+        if (executionResponse && executionResponse.output) {
+          console.log("Execution result received:", executionResponse.output);
+          setOutput(executionResponse.output);
+          resultReceived = true;
+        } else {
+          console.log("No output yet, polling again in 2 seconds...");
+          // Delay for the next polling request
+          await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        }
+      } catch (error) {
+        console.error("Error during polling:", error);
+        setOutput(`Polling Error: ${error.message}`);
+        resultReceived = true;
+      }
+    }
+  
+    console.log("Polling stopped.");
+  };
+  
   const handleLanguageSelect = (languageId, languageName, newFileName) => {
     setSelectedLanguage(languageId);
     setEditorLanguage(languageName.toLowerCase());
